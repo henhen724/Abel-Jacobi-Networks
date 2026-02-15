@@ -1,0 +1,24 @@
+# Abel-Jacobi (aj) conda environment
+# Create: conda env create -f environment.yml
+# Activate: conda activate aj
+# Update: conda env update -f environment.yml --prune
+
+name: aj
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.9,<3.12
+  - numpy
+  - matplotlib
+  - networkx
+  - seaborn
+  - mpmath
+  - tqdm
+  - jupyter
+  - ipykernel
+  - pip
+  - pip:
+    - torch
+    - torchvision

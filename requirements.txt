@@ -1,0 +1,19 @@
+# Abel-Jacobi Networks — Python dependencies
+# Create env: python -m venv .venv && .venv\Scripts\activate (Windows) or source .venv/bin/activate (Unix)
+# Install: pip install -r requirements.txt
+
+# Core (tropical + planewave notebooks)
+numpy>=1.20
+matplotlib>=3.5
+networkx>=2.6
+seaborn>=0.11
+
+# Higher-genus & training notebooks
+torch>=1.12
+torchvision>=0.13
+mpmath>=1.2
+tqdm>=4.60
+
+# Run notebooks locally
+jupyter>=1.0
+ipykernel>=6.0

@@ -24,13 +24,30 @@ This repository contains Jupyter notebooks that:
 - **Tropical notebook:** No extra installs beyond the above.  
 - **Higher-genus / training:** PyTorch, mpmath, tqdm; notebooks assume Google Colab and Google Drive for saving/loading large tables (paths can be adjusted for local use).
 
-## Quick start (tropical)
+## Creating the `aj` environment
+
+**Conda (recommended):**
 
 ```bash
-# Optional: create a venv and install
-pip install numpy matplotlib networkx jupyter
+conda env create -f environment.yml
+conda activate aj
 jupyter notebook tropical_abel_jacobi.ipynb
 ```
+
+**pip + venv:**
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate   # Windows
+# source .venv/bin/activate   # macOS/Linux
+pip install -r requirements.txt
+jupyter notebook tropical_abel_jacobi.ipynb
+```
+
+- **environment.yml** — Conda env named `aj` with Python, PyTorch, and all notebook deps.  
+- **requirements.txt** — Pip-only list for use with a virtualenv or inside conda.
+
+## Quick start (tropical)
 
 Run the notebook to build a chain-of-loops graph, define a divisor, and view the tropical Abel–Jacobi coordinates and plots.
 
