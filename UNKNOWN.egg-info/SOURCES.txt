@@ -1,0 +1,15 @@
+README.md
+UNKNOWN.egg-info/PKG-INFO
+UNKNOWN.egg-info/SOURCES.txt
+UNKNOWN.egg-info/dependency_links.txt
+UNKNOWN.egg-info/top_level.txt
+aj/__init__.py
+aj/classical/__init__.py
+aj/classical/cuts.py
+aj/classical/differentials.py
+aj/classical/forward.py
+aj/classical/period_matrix.py
+aj/classical/tables.py
+aj/tropical/__init__.py
+aj/tropical/graph.py
+aj/tropical/map.py

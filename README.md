@@ -4,25 +4,91 @@ Research code for **tropical** and **classical** Abel–Jacobi maps on hyperelli
 
 ## Overview
 
-This repository contains Jupyter notebooks that:
+This repository provides:
 
-- **Tropical Abel–Jacobi** — Represent hyperelliptic curves as metric graphs (chains of loops), compute the tropical Abel–Jacobi map for divisors, and visualize the image in the Jacobian torus.
-- **Classical Abel–Jacobi** — Precompute period integrals and Abel–Jacobi lookup tables for higher genus (e.g. genus 30) and use them in training.
+- **`aj` library** — A coherent Python package to compute period tables (ω and Abel–Jacobi integrals on a grid), run the **classical Abel–Jacobi forward pass** (divisor → Jacobian coordinates via lookup), and run the **tropical Abel–Jacobi forward pass** (metric graph + divisor → Jacobian coordinates mod cycle lengths).
+- **Notebooks** — Original notebooks for exploration and training; they can import from `aj` or use inlined code.
+
+## Library usage
+
+Install in development mode (from repo root):
+
+```bash
+# Conda (recommended)
+conda env create -f environment.yml
+conda activate aj
+pip install -e .
+
+# Or pip + venv
+python -m venv .venv
+source .venv/bin/activate   # macOS/Linux
+pip install -r requirements.txt
+pip install -e .
+```
+
+Verify the environment:
+
+```bash
+python scripts/check_aj_env.py
+```
+
+### Tropical Abel–Jacobi
+
+```python
+import numpy as np
+from aj import build_chain_of_loops, cycle_data, tropical_abel_jacobi_forward
+
+graph, positions = build_chain_of_loops(genus=2, loop_length=1.6, bridge_length=0.9)
+divisor = [("v0", 1), ("v2", 2), ("l0_b", 1)]
+coords, cycle_lengths = tropical_abel_jacobi_forward(graph, divisor)
+# coords: shape (g,) in [0, cycle_len) per cycle
+```
+
+### Classical Abel–Jacobi (period tables + forward pass)
+
+```python
+from aj.classical import (
+    make_hyperelliptic_cuts,
+    build_omega_table,
+    build_integral_table,
+    abel_jacobi_forward,
+    compute_aj_normalization,
+)
+import numpy as np
+
+g = 2
+grid_r = np.linspace(-3, 3, 32)
+grid_i = np.linspace(-3, 3, 32)
+base_point = complex(-5, -5)
+cuts = make_hyperelliptic_cuts(g, r_max=3, r_min=-3, i_max=3, i_min=-3)
+branch_pts = [z for a, b in cuts for z in (a, b)]
+
+# Build period tables (ω and integrals on grid)
+omega_plus = build_omega_table(g, branch_pts, grid_r, grid_i)
+I_plus = build_integral_table(g, branch_pts, grid_r, grid_i, base_point)
+
+# Forward: divisor (points, weights) -> R^{2g}
+points = np.array([[0.5, 0.5], [-0.5, 0.5]])  # (x, y) = (Re, Im)
+weights = np.array([1.0, -1.0])
+mu, sigma = compute_aj_normalization(I_plus)
+coords_2g = abel_jacobi_forward(points, weights, I_plus, grid_r, grid_i, mu=mu, sigma=sigma)
+```
 
 ## Contents
 
-| Notebook | Description |
-|----------|-------------|
-| `tropical_abel_jacobi.ipynb` | Tropical perspective: build chain-of-loops metric graphs, compute tropical Abel–Jacobi coordinates for divisors, and plot the graph and Jacobian projection. |
-| `higher_genus_lookup_tables.ipynb` | Precompute Abel–Jacobi integrals and period matrices (ω) for a hyperelliptic curve of fixed genus on a grid; saves tables (e.g. for genus 30) for use in training. |
-| `AJ_training_genus30.ipynb` | Training pipeline using pre-computed genus-30 Abel–Jacobi tables; compares with 2D projection and 2g×2g baselines. |
-| `planewave_analysis.ipynb` | Analysis of periodic/plane-wave style approximations (e.g. sums with Gaussian decay) used in the Abel–Jacobi setting. |
+| Item | Description |
+|------|-------------|
+| **`aj`** | Package: `aj.tropical` (graph, tropical AJ map), `aj.classical` (cuts, differentials, period tables, AJ forward). |
+| `tropical_abel_jacobi.ipynb` | Tropical chain-of-loops, divisor → Jacobian, plots. |
+| `higher_genus_lookup_tables.ipynb` | Precompute ω and I on a grid (e.g. genus 30); saves to Drive/local. |
+| `AJ_training_genus30.ipynb` | Training with precomputed tables; 2D and 2g×2g baselines. |
+| `planewave_analysis.ipynb` | Plane-wave / periodic approximations in the AJ setting. |
 
 ## Requirements
 
-- **Core:** Python 3, NumPy, Matplotlib, NetworkX  
-- **Tropical notebook:** No extra installs beyond the above.  
-- **Higher-genus / training:** PyTorch, mpmath, tqdm; notebooks assume Google Colab and Google Drive for saving/loading large tables (paths can be adjusted for local use).
+- **Core (library + tropical):** Python ≥3.9, NumPy, Matplotlib, NetworkX, mpmath, tqdm.
+- **Classical period tables:** mpmath (required for integration).
+- **Notebooks (higher-genus / training):** PyTorch, torchvision; Colab/Drive paths configurable.
 
 ## Creating the `aj` environment
 
@@ -31,6 +97,7 @@ This repository contains Jupyter notebooks that:
 ```bash
 conda env create -f environment.yml
 conda activate aj
+pip install -e .
 jupyter notebook tropical_abel_jacobi.ipynb
 ```
 
@@ -38,18 +105,19 @@ jupyter notebook tropical_abel_jacobi.ipynb
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate   # Windows
-# source .venv/bin/activate   # macOS/Linux
+source .venv/bin/activate   # macOS/Linux
 pip install -r requirements.txt
+pip install -e .
 jupyter notebook tropical_abel_jacobi.ipynb
 ```
 
-- **environment.yml** — Conda env named `aj` with Python, PyTorch, and all notebook deps.  
-- **requirements.txt** — Pip-only list for use with a virtualenv or inside conda.
+- **environment.yml** — Conda env named `aj` with Python, PyTorch, and notebook deps.  
+- **requirements.txt** — Pip dependencies.  
+- **pyproject.toml** — Package metadata and `pip install -e .` install.
 
 ## Quick start (tropical)
 
-Run the notebook to build a chain-of-loops graph, define a divisor, and view the tropical Abel–Jacobi coordinates and plots.
+Run the tropical notebook or use the library as in the examples above.
 
 ## License
 

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abel-jacobi-networks"
+version = "0.1.0"
+description = "Tropical and classical Abel-Jacobi maps on hyperelliptic curves"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Proprietary" }
+authors = [{ name = "Abel-Jacobi Networks" }]
+dependencies = [
+    "numpy>=1.20",
+    "matplotlib>=3.5",
+    "networkx>=2.6",
+    "mpmath>=1.2",
+    "tqdm>=4.60",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=1.12", "torchvision>=0.13"]
+dev = ["pytest", "jupyter", "ipykernel"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aj*"]
