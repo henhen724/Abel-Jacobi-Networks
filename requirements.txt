@@ -17,3 +17,6 @@ tqdm>=4.60
 # Run notebooks locally
 jupyter>=1.0
 ipykernel>=6.0
+
+# Tests
+pytest>=7.0

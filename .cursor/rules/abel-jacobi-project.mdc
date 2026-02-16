@@ -9,6 +9,7 @@ alwaysApply: false
 - **Domain:** Tropical and classical Abel-Jacobi maps; hyperelliptic curves; metric graphs (chain of loops); period integrals; PyTorch training with precomputed tables.
 - **Notebooks:** Prefer functions with docstrings; keep config (paths, genus, grid size) at the top. Do not hardcode absolute paths or Drive paths—use variables (e.g. `SAVE_DIR`, `DRIVE_FOLDER`).
 - **Tropical graph API:** `build_chain_of_loops(genus, loop_length, bridge_length)` returns `(graph, positions)`. Edges use `length` attribute. Divisors are lists of `(node_name, weight)`. Do not change `cycle_data` or `tropical_abel_jacobi_divisor` signatures without updating all call sites.
+- **Theta / inverse AJ:** `abel_jacobi_theta.py` provides Riemann theta, log θ, ∇θ, ∇log θ, and `inverse_abel_jacobi_newton(..., use_log_theta=True)`. Expects A_fun(z) → C^g, omega_fun(z) → C^g; period matrix Ω with Im(Ω) > 0.
 - **Table format:** Shared keys between lookup and training notebooks: `genus`, `grid_r`, `grid_i`, `branch_pts`, `I_plus`, `omega_plus` (or `omega_plus` in omegas file). Keep save/load keys in sync when changing format.
 - **Dependencies:** Document new packages in README; use minimal `!pip install` in cells (e.g. `torch`, `numpy`, `mpmath`, `tqdm`). Tropical notebook only needs `numpy`, `matplotlib`, `networkx`.
 - **New files:** Update README table and, if relevant, AGENTS.md. See AGENTS.md for full agent instructions.

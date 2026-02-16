@@ -19,6 +19,8 @@ Use this file when working in the **Abel–Jacobi Networks** repository.
 - **`aj` library:** Top-level `aj` exposes `build_chain_of_loops`, `cycle_data`, `tropical_abel_jacobi_forward`, `make_hyperelliptic_cuts`, `abel_jacobi_forward`. Tropical code lives in `aj.tropical`, classical in `aj.classical`. The alias `tropical_abel_jacobi_divisor` = `tropical_abel_jacobi_forward` is kept for notebook compatibility.
 - **tropical_abel_jacobi.ipynb:** Graph construction uses `length` edge attribute and node names like `v0`, `l0_a`, `l0_b`. Do not change the contract of `build_chain_of_loops`, `cycle_data`, or `tropical_abel_jacobi_divisor` without updating call sites and README.
 - **higher_genus_lookup_tables.ipynb / AJ_training_genus30.ipynb:** File names and keys (e.g. `aj_integrals_genus30.pt`, `omega_plus`, `grid_r`, `grid_i`) are shared between notebooks; keep them in sync when changing save/load format.
+- **`abel_jacobi_theta.py`:** Standalone module (no `aj` dependency). Provides `riemann_theta`, `grad_riemann_theta`, `log_theta`, `grad_log_theta`, and `inverse_abel_jacobi_newton(u, Omega, A_fun, omega_fun, z0, ...)` for Newton on θ(A(z)−u)=0 with optional log theta. Used by `theta_abel_jacobi.ipynb`.
+- **theta_abel_jacobi.ipynb:** Sets up a genus-2 hyperelliptic curve (branch points, ω, Abel map with mpmath), a toy period matrix Ω, evaluates theta and grad/log theta, then runs inverse Abel–Jacobi via Newton from the module. Optional cell sketches contour integration for period columns.
 - **New notebooks:** Add a short description and requirements to the README table and to AGENTS.md if they introduce new conventions.
 
 ## Testing and runs

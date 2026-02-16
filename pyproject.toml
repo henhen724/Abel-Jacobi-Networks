@@ -25,3 +25,9 @@ dev = ["pytest", "jupyter", "ipykernel"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["aj*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (inverse AJ with numerical integration)",
+]
+testpaths = ["tests"]
