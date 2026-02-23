@@ -1,0 +1,12 @@
+---
+description: Use aj_env conda environment and install missing packages there
+alwaysApply: true
+---
+
+# Environment: aj_env
+
+- **Always use the `aj_env` conda environment** when running commands (e.g. `pytest`, `python`, `pip`). Activate it first: `conda activate aj_env`, or run via `conda run -n aj_env ...`.
+- **When a needed package is missing** (e.g. import error, test skip for "mpmath not installed", "torch not installed"), **install it into `aj_env`** instead of the system or another env:
+  - `conda activate aj_env && pip install <package>`
+  - or `conda run -n aj_env pip install <package>`
+- Do not assume a different conda env or system Python unless the user explicitly asks for it.

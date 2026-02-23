@@ -1,6 +1,6 @@
 """
-Unit tests for abel_jacobi_theta: Riemann theta evaluation and inverse Abel-Jacobi
-via Newton on log Klein theta. Tests are checked against numerical integration (mpmath)
+Unit tests for Riemann theta and inverse Abel-Jacobi (aj.classical.theta_functions
+and aj.classical.inverse_abel_jacobi_map). Checked against numerical integration (mpmath)
 and, for genus 1, against mpmath's Jacobi theta.
 """
 
@@ -14,12 +14,13 @@ try:
 except ImportError:
     HAS_MPMATH = False
 
-from abel_jacobi_theta import (
+from aj.classical import (
     riemann_theta,
     grad_riemann_theta,
     log_theta,
     grad_log_theta,
     inverse_abel_jacobi_newton,
+    inverse_abel_jacobi_via_kleinian_p,
     abel_map_vector,
     omega_vector,
 )
@@ -244,3 +245,49 @@ def test_omega_vector_shape():
     om = omega_vector(z, fake_omega, g)
     assert om.shape == (g,)
     np.testing.assert_allclose(om, [z, 2*z])
+
+
+def test_inverse_via_kleinian_p_consistent_with_forward_symmetric_map():
+    """
+    Forward/inverse consistency using symmetric polynomial data:
+      forward: roots -> (s1, s2) with s1 = x1 + x2, s2 = x1*x2
+      inverse: u=(s1,s2) -> P-column -> polynomial -> roots
+
+    We use a toy log-sigma model whose second derivatives encode:
+      P[:,0] = [u0, u1]
+    so column 0 stores (s1, s2) directly.
+    """
+    roots_true = np.array([0.8 + 0.1j, -0.35 + 0.2j], dtype=np.complex128)
+    s1 = roots_true[0] + roots_true[1]
+    s2 = roots_true[0] * roots_true[1]
+    u = np.array([s1, s2], dtype=np.complex128)
+
+    def toy_log_sigma(v):
+        v = np.asarray(v, dtype=np.complex128)
+        # Gives P[:,0] = [v0, v1] because:
+        # logσ = -(v0^3)/6 - (v0*v1^2)/2
+        # => -∂00 logσ = v0, -∂10 logσ = v1
+        return -(v[0] ** 3) / 6.0 - 0.5 * v[0] * (v[1] ** 2)
+
+    def column_to_monic_coeffs(p_col, _p_mat):
+        # x^2 - s1 x + s2 = 0 with s1=p_col[0], s2=p_col[1]
+        return np.array([1.0 + 0.0j, -p_col[0], p_col[1]], dtype=np.complex128)
+
+    roots_est, coeffs, p_mat = inverse_abel_jacobi_via_kleinian_p(
+        u=u,
+        column_to_monic_coeffs=column_to_monic_coeffs,
+        column_index=0,
+        log_sigma_fun=toy_log_sigma,
+        h=5e-6,
+    )
+
+    # Compare unordered roots
+    roots_est_sorted = roots_est[np.argsort(roots_est.real)]
+    roots_true_sorted = roots_true[np.argsort(roots_true.real)]
+    np.testing.assert_allclose(roots_est_sorted, roots_true_sorted, rtol=0, atol=5e-4)
+
+    # Forward consistency at the coefficient level
+    coeffs_true = np.poly(roots_true)
+    coeffs_true = coeffs_true / coeffs_true[0]
+    np.testing.assert_allclose(coeffs / coeffs[0], coeffs_true, rtol=0, atol=5e-4)
+    assert p_mat.shape == (2, 2)

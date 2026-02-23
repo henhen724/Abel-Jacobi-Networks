@@ -28,12 +28,15 @@ try:
 except ImportError:
     HAS_MPMATH = False
 
-from abel_jacobi_theta import (
+from aj.classical.theta_functions import (
     riemann_theta,
     grad_riemann_theta,
     log_theta,
     grad_log_theta,
+)
+from aj.classical.inverse_abel_jacobi_map import (
     inverse_abel_jacobi_newton,
+    inverse_abel_jacobi_via_kleinian_p,
 )
 
 
@@ -226,6 +229,13 @@ class InverseAbelJacobiNetwork(nn.Module):
         branch_points: torch.Tensor,
         base_point: complex | Tuple[float, float],
         init_coeffs: Optional[torch.Tensor] = None,
+        init_divisor_points: Optional[torch.Tensor] = None,
+        use_kleinian_p: bool = True,
+        p_column_index: int = 0,
+        p_column_to_monic_coeffs=None,
+        log_sigma_fun=None,
+        Omega_init: Optional[np.ndarray] = None,
+        K_init: Optional[np.ndarray] = None,
         mp_dps: int = 50,
         newton_tol: float = 1e-8,
         newton_max_iter: int = 50,
@@ -234,6 +244,9 @@ class InverseAbelJacobiNetwork(nn.Module):
         self.genus = genus
         self.newton_tol = newton_tol
         self.newton_max_iter = newton_max_iter
+        self.use_kleinian_p = use_kleinian_p
+        self.p_column_index = int(p_column_index)
+        self._log_sigma_fun = log_sigma_fun
 
         # Convert branch_points to numpy complex array
         if branch_points.dim() == 2 and branch_points.shape[1] == 2:
@@ -254,10 +267,16 @@ class InverseAbelJacobiNetwork(nn.Module):
             base_point = complex(base_point[0], base_point[1])
         self.base_point = base_point
 
-        # Precompute period matrix and Riemann constant
-        Omega, K = compute_period_matrix_hyperelliptic(
-            branch_pts_np, base_point, genus, mp_dps=mp_dps
-        )
+        # Precompute period matrix and Riemann constant.
+        # Default cycle assumption follows standard cut ordering:
+        # cuts are [a_{2j}, a_{2j+1}] in the order provided by branch_points.
+        if Omega_init is None or K_init is None:
+            Omega, K = compute_period_matrix_hyperelliptic(
+                branch_pts_np, base_point, genus, mp_dps=mp_dps
+            )
+        else:
+            Omega = np.asarray(Omega_init, dtype=np.complex128)
+            K = np.asarray(K_init, dtype=np.complex128)
         self.register_buffer("Omega", torch.from_numpy(Omega.real))
         self.register_buffer("Omega_imag", torch.from_numpy(Omega.imag))
         self.register_buffer("K", torch.from_numpy(K.real))
@@ -269,6 +288,30 @@ class InverseAbelJacobiNetwork(nn.Module):
         if init_coeffs is None:
             init_coeffs = torch.randn(genus, dtype=torch.float32) * 0.1
         self.coeffs = nn.Parameter(init_coeffs)
+
+        # Learnable divisor point offsets (gradable for training).
+        if init_divisor_points is None:
+            init_divisor_points = torch.zeros(genus, 2, dtype=torch.float32)
+        else:
+            init_divisor_points = init_divisor_points.detach().clone().float()
+            if init_divisor_points.shape != (genus, 2):
+                raise ValueError("init_divisor_points must have shape (g, 2)")
+        self.divisor_points = nn.Parameter(init_divisor_points)
+
+        # Default map from P-column to monic polynomial coefficients.
+        # Uses p_col[k-1] as sigma_k in x^g - sigma1 x^{g-1} + ... + (-1)^g sigmag.
+        if p_column_to_monic_coeffs is None:
+            def _default_p_to_monic(p_col, _p_mat):
+                p_col = np.asarray(p_col, dtype=np.complex128).ravel()
+                if p_col.size < self.genus:
+                    raise ValueError("p_col must have at least g entries")
+                coeffs = [1.0 + 0.0j]
+                for k in range(1, self.genus + 1):
+                    coeffs.append(((-1) ** k) * p_col[k - 1])
+                return np.asarray(coeffs, dtype=np.complex128)
+            self._p_column_to_monic_coeffs = _default_p_to_monic
+        else:
+            self._p_column_to_monic_coeffs = p_column_to_monic_coeffs
 
         # Cache for omega_fn and integrate_omega (computed once per forward)
         self._omega_fn = None
@@ -317,6 +360,22 @@ class InverseAbelJacobiNetwork(nn.Module):
             coeffs[k-1] = sum(np.prod(x_coords[list(comb)]) for comb in combinations(range(g), k))
         return coeffs
 
+    def _elementary_symmetric_polynomials_torch(self, roots: torch.Tensor) -> torch.Tensor:
+        """
+        Compute sigma_1..sigma_g from roots via polynomial recurrence, differentiable.
+        roots: (g,) complex tensor
+        """
+        g = roots.numel()
+        poly = torch.zeros(g + 1, dtype=roots.dtype, device=roots.device)
+        poly[0] = 1.0 + 0.0j
+        for r in roots:
+            prev = poly.clone()
+            poly[1:] = prev[1:] - r * prev[:-1]
+        sigma = torch.empty(g, dtype=roots.dtype, device=roots.device)
+        for k in range(1, g + 1):
+            sigma[k - 1] = ((-1) ** k) * poly[k]
+        return sigma
+
     def forward(self, u: torch.Tensor) -> torch.Tensor:
         """
         Forward pass: inverse Abel-Jacobi map.
@@ -356,63 +415,48 @@ class InverseAbelJacobiNetwork(nn.Module):
         u_flat = u_complex.reshape(-1, self.genus)
         batch_size = u_flat.shape[0]
 
-        # For each u in batch, find g points on curve via inverse Abel-Jacobi
-        # Strategy: use theta vanishing to find x-coordinates, then compute symmetric coeffs
+        # For each u in batch, find g points on curve via inverse Abel-Jacobi.
         coeffs_list = []
+        offset_complex = torch.complex(self.divisor_points[:, 0], self.divisor_points[:, 1])
         for i in range(batch_size):
             u_i = u_flat[i]
             # Adjust by Riemann constant: solve for divisor D with AJ(D) = u_i + K
             u_adj = u_i + self._K_complex
-
-            # Find g points whose Abel-Jacobi sum equals u_adj
-            # Strategy: find points one at a time, subtracting their contribution
-            # For hyperelliptic curves, we use theta vanishing: zeros of θ(A(x) - u_adj)
-            # give the x-coordinates. We solve for g different zeros.
-
-            x_coords = []
-            u_remaining = u_adj.copy()
-            # Use g different initial guesses spread around the curve
-            for j in range(self.genus):
-                # Initial guess: use learned coefficients or spread around curve
-                if j == 0:
-                    # First guess: use base point or a point derived from learned coeffs
-                    x0 = self.base_point + 0.1 * (1 + 1j)
-                else:
-                    # Subsequent guesses: spread around, avoiding found points
-                    angle = 2 * np.pi * j / self.genus
-                    x0 = self.base_point + 0.5 * np.exp(1j * angle)
-                    # Avoid too close to already found points
-                    for x_found in x_coords:
-                        if abs(x0 - x_found) < 0.1:
-                            x0 = x_found + 0.3 * np.exp(1j * (angle + np.pi/4))
-
-                # Find a point x such that θ(A(x) - u_remaining) ≈ 0
-                # For the j-th point, we want A(x_j) ≈ u_remaining / (g - j) approximately
-                # But more precisely, we want the sum of all points to equal u_adj
-                # So we solve for a point that brings us closer to u_adj
-                target = u_remaining / max(1, self.genus - j)
-                x_sol, converged, _ = inverse_abel_jacobi_newton(
-                    target,
-                    self._Omega_complex,
-                    self._abel_map,
-                    self._omega_at,
-                    x0,
-                    tol=self.newton_tol,
-                    max_iter=self.newton_max_iter,
-                    use_log_theta=True,
+            if self.use_kleinian_p:
+                roots_np, _, _ = inverse_abel_jacobi_via_kleinian_p(
+                    u=u_adj,
+                    column_to_monic_coeffs=self._p_column_to_monic_coeffs,
+                    column_index=self.p_column_index,
+                    log_sigma_fun=self._log_sigma_fun,
                 )
-                x_coords.append(x_sol)
-                # Subtract this point's contribution for next iteration
-                A_x = self._abel_map(x_sol)
-                u_remaining = u_remaining - A_x
+            else:
+                x_coords = []
+                u_remaining = u_adj.copy()
+                for j in range(self.genus):
+                    if j == 0:
+                        x0 = self.base_point + 0.1 * (1 + 1j)
+                    else:
+                        angle = 2 * np.pi * j / self.genus
+                        x0 = self.base_point + 0.5 * np.exp(1j * angle)
+                    target = u_remaining / max(1, self.genus - j)
+                    x_sol, _, _ = inverse_abel_jacobi_newton(
+                        target,
+                        self._Omega_complex,
+                        self._abel_map,
+                        self._omega_at,
+                        x0,
+                        tol=self.newton_tol,
+                        max_iter=self.newton_max_iter,
+                        use_log_theta=True,
+                    )
+                    x_coords.append(x_sol)
+                    u_remaining = u_remaining - self._abel_map(x_sol)
+                roots_np = np.asarray(x_coords, dtype=np.complex128)
 
-            x_coords = np.array(x_coords)
-
-            # Compute symmetric polynomial coefficients from x-coordinates
-            sigma = self._elementary_symmetric_polynomials(x_coords)
-
-            # Convert to torch tensor (real part for now; could extend to complex)
-            coeffs_list.append(torch.from_numpy(sigma.real).float())
+            roots_t = torch.as_tensor(roots_np, dtype=torch.complex64, device=self.coeffs.device)
+            roots_t = roots_t + offset_complex.to(roots_t.dtype)
+            sigma_t = self._elementary_symmetric_polynomials_torch(roots_t)
+            coeffs_list.append(sigma_t.real.float())
 
         coeffs_out = torch.stack(coeffs_list, dim=0)  # (batch_size, g)
 

@@ -83,7 +83,8 @@ coords_2g = abel_jacobi_forward(points, weights, I_plus, grid_r, grid_i, mu=mu, 
 | `higher_genus_lookup_tables.ipynb` | Precompute ω and I on a grid (e.g. genus 30); saves to Drive/local. |
 | `AJ_training_genus30.ipynb` | Training with precomputed tables; 2D and 2g×2g baselines. |
 | `planewave_analysis.ipynb` | Plane-wave / periodic approximations in the AJ setting. |
-| **`abel_jacobi_theta.py`** | Riemann (Klein) theta evaluation, log θ, ∇θ and ∇log θ; inverse Abel–Jacobi via Newton on θ(A(z)−u)=0 using log theta. |
+| **`aj.classical.theta_functions`** | Riemann theta (with characteristic), log θ, ∇θ, ∇log θ. |
+| **`aj.classical.inverse_abel_jacobi_map`** | Inverse Abel–Jacobi via Newton on θ(A(z)−u)=0; `abel_map_vector`, `omega_vector`. |
 | `theta_abel_jacobi.ipynb` | Evaluates theta functions and demonstrates inverse Abel–Jacobi with Newton’s method on log Klein theta (genus 2 example). |
 | **`aj.classical.inverse_network`** | `InverseAbelJacobiNetwork`: PyTorch module using inverse Abel–Jacobi as forward pass. Parameters: branch points, base point, symmetric polynomial coefficients. Precomputes period matrix Ω and Riemann constant K. Uses x^n dx / y as basis of differentials. |
 
@@ -124,7 +125,7 @@ Run the tropical notebook or use the library as in the examples above.
 
 ## Running tests
 
-Unit tests for the theta module and inverse Abel–Jacobi (against numerical integration and mpmath’s Jacobi theta) live in `tests/test_abel_jacobi_theta.py`. From the repo root:
+Unit tests for theta and inverse Abel–Jacobi live in `tests/test_abel_jacobi_theta.py` and `tests/test_klienian_functions.py` (they import from `aj.classical`). From the repo root:
 
 ```bash
 pip install pytest numpy mpmath   # if not already in the env

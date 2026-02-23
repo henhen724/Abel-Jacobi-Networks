@@ -22,11 +22,13 @@ ENV/
 Thumbs.db
 
 # Data / outputs (optional: remove if you want to track small outputs)
-*.pt
-*.pth
-*.npz
+**.pt
+**.pth
+**.npz
+**.gz
 content/
 /content/
+data
 
 # Local paths that may contain secrets or machine-specific paths
 .env.local
