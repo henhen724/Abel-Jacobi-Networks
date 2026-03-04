@@ -1,12 +1,18 @@
 ---
-description: Use aj_env conda environment and install missing packages there
+description: Use the aj_env Jupyter/kernel environment and install missing packages there
 alwaysApply: true
 ---
 
 # Environment: aj_env
 
-- **Always use the `aj_env` conda environment** when running commands (e.g. `pytest`, `python`, `pip`). Activate it first: `conda activate aj_env`, or run via `conda run -n aj_env ...`.
-- **When a needed package is missing** (e.g. import error, test skip for "mpmath not installed", "torch not installed"), **install it into `aj_env`** instead of the system or another env:
-  - `conda activate aj_env && pip install <package>`
-  - or `conda run -n aj_env pip install <package>`
-- Do not assume a different conda env or system Python unless the user explicitly asks for it.
+On **Sherlock (sherlock.stanford.edu)** this project does **not** use conda; instead it relies on the cluster module stack plus an optional venv, wired through the `Python (aj_env)` Jupyter kernel.
+
+- **When running Python code or CLI commands for this repo on Sherlock**, first activate the AJ environment by sourcing:
+  - `source ~/activate_aj_env.sh`
+  - This loads the Sherlock modules (Python 3.12 + PyTorch, torchvision, numpy, etc.), and, if present, overlays `~/aj_env_venv`.
+- **When a needed package is missing** (e.g. import error, test skip for "mpmath not installed", "torch not installed"), **install it into the AJ venv or module-based Python**, not into a random system Python:
+  - If you have created `~/aj_env_venv`:  
+    - `source ~/activate_aj_env.sh` (which will also activate `~/aj_env_venv`), then `pip install <package>` or `pip install -e .`.
+  - If you have not created a venv, install into the module Python after `source ~/activate_aj_env.sh` using `pip install --user <package>` (or a venv if you prefer).
+- **For Jupyter notebooks**, always select the kernel **`Python (aj_env)`**, which uses `~/.local/share/jupyter/kernels/aj_env/launch_kernel.sh` to source `~/activate_aj_env.sh` before starting the kernel.
+- On non-Sherlock machines you may still use the conda-based workflow described in `README.md` (`conda env create -f environment.yml && conda activate aj`), but on Sherlock prefer the `activate_aj_env.sh` + modules approach.

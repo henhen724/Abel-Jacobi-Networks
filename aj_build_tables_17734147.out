@@ -1,0 +1,9 @@
+=== AJ Forward Table Build ===
+Repo root     : /home/users/hshunt/Abel-Jacobi-Networks
+Data root     : /home/users/hshunt/Abel-Jacobi-Networks/data
+Tables dir    : <auto>
+Genus         : 30
+Grid size     : 96
+Auto build    : 1
+Force rebuild : 0
+

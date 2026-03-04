@@ -1,3 +1,24 @@
+Metadata-Version: 2.4
+Name: abel-jacobi-networks
+Version: 0.1.0
+Summary: Tropical and classical Abel-Jacobi maps on hyperelliptic curves
+Author: Abel-Jacobi Networks
+License: Proprietary
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.20
+Requires-Dist: matplotlib>=3.5
+Requires-Dist: networkx>=2.6
+Requires-Dist: mpmath>=1.2
+Requires-Dist: tqdm>=4.60
+Provides-Extra: torch
+Requires-Dist: torch>=1.12; extra == "torch"
+Requires-Dist: torchvision>=0.13; extra == "torch"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: jupyter; extra == "dev"
+Requires-Dist: ipykernel; extra == "dev"
+
 # Abel–Jacobi Networks
 
 Research code for **tropical** and **classical** Abel–Jacobi maps on hyperelliptic curves, with applications to metric graphs, period integrals, and neural network training.
@@ -86,7 +107,6 @@ coords_2g = abel_jacobi_forward(points, weights, I_plus, grid_r, grid_i, mu=mu, 
 | **`aj.classical.theta_functions`** | Riemann theta (with characteristic), log θ, ∇θ, ∇log θ. |
 | **`aj.classical.inverse_abel_jacobi_map`** | Inverse Abel–Jacobi via Newton on θ(A(z)−u)=0; `abel_map_vector`, `omega_vector`. |
 | `theta_abel_jacobi.ipynb` | Evaluates theta functions and demonstrates inverse Abel–Jacobi with Newton’s method on log Klein theta (genus 2 example). |
-| `notebooks/aj_mnist_accuracy_results.ipynb` | Runs classical AJ forward/inverse MNIST accuracy test (same as `scripts/aj_mnist_test_accuracy.py`) and shows results in a table and bar chart. |
 | **`aj.classical.inverse_network`** | `InverseAbelJacobiNetwork`: PyTorch module using inverse Abel–Jacobi as forward pass. Parameters: branch points, base point, symmetric polynomial coefficients. Precomputes period matrix Ω and Riemann constant K. Uses x^n dx / y as basis of differentials. |
 
 ## Requirements
@@ -96,8 +116,6 @@ coords_2g = abel_jacobi_forward(points, weights, I_plus, grid_r, grid_i, mu=mu, 
 - **Notebooks (higher-genus / training):** PyTorch, torchvision; Colab/Drive paths configurable.
 
 ## Creating the `aj` environment
-
-### Local development (laptop/desktop)
 
 **Conda (recommended):**
 
@@ -121,52 +139,6 @@ jupyter notebook tropical_abel_jacobi.ipynb
 - **environment.yml** — Conda env named `aj` with Python, PyTorch, and notebook deps.  
 - **requirements.txt** — Pip dependencies.  
 - **pyproject.toml** — Package metadata and `pip install -e .` install.
-
-### Sherlock (sherlock.stanford.edu, no conda)
-
-On Sherlock we reuse the cluster’s module stack (Python 3.12 + PyTorch) and a small activation script; you do **not** need a conda env there.
-
-1. **Install the Jupyter kernel once** (from repo root):
-
-   ```bash
-   bash scripts/install_aj_env_kernel.sh
-   ```
-
-   This copies `activate_aj_env.sh` to `~/activate_aj_env.sh` and installs the kernel spec under `~/.local/share/jupyter/kernels/aj_env/`.
-
-2. **Environment activation for CLI work** (login or compute node):
-
-   ```bash
-   source ~/activate_aj_env.sh
-   python3 scripts/check_aj_env.py
-   ```
-
-   The script loads the Sherlock modules:
-
-   - `python/3.12.1`
-   - `py-pytorch/2.4.1_py312`
-   - `py-torchvision/0.19.1_py312`
-   - plus NumPy / SciPy / scikit-learn, matching `activate_diffusion.sh`.
-
-   Optionally you can create a lightweight venv on top (for extra packages):
-
-   ```bash
-   python3 -m venv ~/aj_env_venv
-   source ~/aj_env_venv/bin/activate
-   pip install -e . mpmath networkx matplotlib tqdm ipykernel
-   ```
-
-   Subsequent calls to `source ~/activate_aj_env.sh` will automatically activate `~/aj_env_venv` if it exists.
-
-3. **Jupyter kernel selection**:
-
-   In Jupyter/VS Code on Sherlock, select the kernel **Python (aj_env)**.  
-   The kernel’s `launch_kernel.sh` runs:
-
-   - `source ~/activate_aj_env.sh`  
-   - `python3 -m ipykernel_launcher ...`
-
-   so all notebooks (e.g. `notebooks/aj_mnist_accuracy_results.ipynb`, `AJ_training_genus30.ipynb`, `aj_networks_train.ipynb`) see the correct Python, `torch`, `torchvision`, and `aj` library.
 
 ## Quick start (tropical)
 

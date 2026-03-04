@@ -23,8 +23,11 @@ torch = ["torch>=1.12", "torchvision>=0.13"]
 dev = ["pytest", "jupyter", "ipykernel"]
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["aj*"]
+
+[tool.setuptools.package-dir]
+"" = "src"
 
 [tool.pytest.ini_options]
 markers = [

@@ -10,7 +10,7 @@ from typing import Callable, Optional, Tuple, Union
 
 import numpy as np
 
-from aj.classical.theta_functions import (
+from .theta_functions import (
     _ensure_complex_array,
     grad_log_theta,
     grad_riemann_theta,

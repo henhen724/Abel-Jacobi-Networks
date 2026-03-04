@@ -8,7 +8,7 @@ tropical Abel-Jacobi image as coordinates on the Jacobian torus.
 import numpy as np
 import networkx as nx
 
-from aj.tropical.graph import cycle_data
+from .graph import cycle_data
 
 
 def tropical_abel_jacobi_forward(graph, divisor, base="v0"):

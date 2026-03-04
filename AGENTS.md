@@ -23,6 +23,7 @@ Use this file when working in the **Abel–Jacobi Networks** repository.
 - **`aj.classical.inverse_abel_jacobi_map`:** `inverse_abel_jacobi_newton(u, Omega, A_fun, omega_fun, z0, ...)` for Newton on θ(A(z)−u)=0; `abel_map_vector`, `omega_vector`. Imports theta from `theta_functions`.
 - **theta_abel_jacobi.ipynb:** Sets up a genus-2 hyperelliptic curve (branch points, ω, Abel map with mpmath), a toy period matrix Ω, evaluates theta and grad/log theta, then runs inverse Abel–Jacobi via Newton from the module. Optional cell sketches contour integration for period columns.
 - **New notebooks:** Add a short description and requirements to the README table and to AGENTS.md if they introduce new conventions.
+- **`notebooks/aj_mnist_accuracy_results.ipynb`:** Runs `scripts/aj_mnist_test_accuracy.py` (classical AJ forward + inverse MNIST test), parses the summary from stdout, and displays accuracy/loss in a table and bar chart. Config: `REPO_ROOT`, `DATA_ROOT`, `TABLES_DIR`, `FORWARD_CKPT`, `INVERSE_CKPT`, `TEST_SUBSET`. Run from repo root or from `notebooks/`; repo root is added to `sys.path`. Uses kernel **Python (aj_env)**; install with `bash scripts/install_aj_env_kernel.sh` (same pattern as `~/diffusion_venv`).
 
 ## Testing and runs
 

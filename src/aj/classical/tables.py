@@ -8,7 +8,7 @@ AJ forward pass. Uses mpmath for integration.
 import numpy as np
 from tqdm import tqdm
 
-from aj.classical.differentials import make_omega, integrate_omega
+from .differentials import make_omega, integrate_omega
 
 
 def build_omega_table(

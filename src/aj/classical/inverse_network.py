@@ -28,13 +28,13 @@ try:
 except ImportError:
     HAS_MPMATH = False
 
-from aj.classical.theta_functions import (
+from .theta_functions import (
     riemann_theta,
     grad_riemann_theta,
     log_theta,
     grad_log_theta,
 )
-from aj.classical.inverse_abel_jacobi_map import (
+from .inverse_abel_jacobi_map import (
     inverse_abel_jacobi_newton,
     inverse_abel_jacobi_via_kleinian_p,
 )
