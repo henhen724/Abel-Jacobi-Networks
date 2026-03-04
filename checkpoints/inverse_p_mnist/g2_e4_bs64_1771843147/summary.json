@@ -1,0 +1,11 @@
+{
+  "run_name": "g2_e4_bs64_1771843147",
+  "genus": 2,
+  "epochs": 4,
+  "batch_size": 64,
+  "train_subset": 12000,
+  "test_subset": 2000,
+  "best_test_acc": 14.85,
+  "best_epoch": 4,
+  "history_len": 4
+}
