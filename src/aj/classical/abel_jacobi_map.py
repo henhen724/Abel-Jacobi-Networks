@@ -107,17 +107,31 @@ def abel_jacobi_forward(
 def compute_aj_normalization(I_plus):
     """Compute per-channel mean and std of I_plus (Re then Im over H×W).
 
+    Uses nanmean/nanstd so that NaN entries (e.g. from integration near branch
+    points) do not propagate; any remaining NaN in mu/sigma is replaced with
+    safe defaults so the model never sees NaN normalization.
+
+    Same statistics as the inline ``mu`` / ``sigma`` block in
+    ``AJ_training_genus30.ipynb`` (per-channel mean/std of stacked Re/Im integrals).
+
     Returns
     -------
     mu : np.ndarray of shape (2*g,)
     sigma : np.ndarray of shape (2*g,)
     """
-    I_plus = np.asarray(I_plus)
+    if hasattr(I_plus, "cpu"):
+        I_plus = I_plus.cpu().numpy()
+    else:
+        I_plus = np.asarray(I_plus)
     g, H, W = I_plus.shape
     I_re = I_plus.real  # (g, H, W)
     I_im = I_plus.imag
     I_ch = np.concatenate([I_re, I_im], axis=0)  # (2g, H, W)
-    mu = I_ch.reshape(2 * g, -1).mean(axis=1)
-    sigma = I_ch.reshape(2 * g, -1).std(axis=1)
+    mu = np.nanmean(I_ch.reshape(2 * g, -1), axis=1)
+    sigma = np.nanstd(I_ch.reshape(2 * g, -1), axis=1)
+    sigma = np.maximum(sigma, 1e-6)
+    # If a channel was all NaN, nanmean/nanstd return NaN; use safe defaults
+    mu = np.where(np.isfinite(mu), mu, 0.0)
+    sigma = np.where(np.isfinite(sigma), sigma, 1.0)
     sigma = np.maximum(sigma, 1e-6)
     return mu, sigma

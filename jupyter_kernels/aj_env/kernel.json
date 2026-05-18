@@ -1,9 +1,0 @@
-{
-  "argv": [
-    "KERNEL_DIR/launch_kernel.sh",
-    "-f",
-    "{connection_file}"
-  ],
-  "display_name": "Python (aj_env)",
-  "language": "python"
-}

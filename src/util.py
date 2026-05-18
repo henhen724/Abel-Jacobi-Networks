@@ -117,13 +117,12 @@ def _pack_complex_table(table_gHW):
     return torch.cat([re, im], dim=0).unsqueeze(0).contiguous()
 
 
-def load_forward_tables(tables_dir: str | Path, device):
-    """Load genus-30 forward AJ tables and precompute anchors/normalization."""
+def load_forward_tables(tables_dir: str | Path, device, genus: int = 30):
+    """Load forward AJ tables and precompute anchors/normalization."""
     import numpy as np
     import torch  # type: ignore[import]
 
-    ints_path = Path(tables_dir) / "aj_integrals_genus30.pt"
-    omeg_path = Path(tables_dir) / "aj_omegas_genus30.pt"
+    ints_path, omeg_path = _forward_table_paths(tables_dir, genus)
     if not ints_path.is_file() or not omeg_path.is_file():
         return None
 
@@ -136,6 +135,11 @@ def load_forward_tables(tables_dir: str | Path, device):
     branch_pts = np.array(ints["branch_pts"])
     I_plus = ints["I_plus"]
     Om_plus = omeg["omega_plus"]
+    # Avoid NaN/Inf from integration near branch points so loss stays finite
+    if torch.is_tensor(I_plus) and (torch.isnan(I_plus).any() or torch.isinf(I_plus).any()):
+        I_plus = torch.nan_to_num(I_plus, nan=0.0, posinf=0.0, neginf=0.0)
+    if torch.is_tensor(Om_plus) and (torch.isnan(Om_plus).any() or torch.isinf(Om_plus).any()):
+        Om_plus = torch.nan_to_num(Om_plus, nan=0.0, posinf=0.0, neginf=0.0)
     H, W = I_plus.shape[-2:]
     grid_r = torch.tensor(grid_r_np, dtype=torch.float32)
     grid_i = torch.tensor(grid_i_np, dtype=torch.float32)
@@ -201,6 +205,35 @@ def load_forward_tables(tables_dir: str | Path, device):
     }
 
 
+def refresh_forward_table_normalization(tables: dict, device=None, nan_safe: bool = True) -> dict:
+    """
+    Set ``tables[\"mu_t\"]`` and ``tables[\"sigma_t\"]`` for AJGridActivationNorm.
+
+    By default uses ``aj.classical.compute_aj_normalization`` (nan-safe over the grid).
+    If ``nan_safe=False``, keeps mean/std already computed in ``load_forward_tables``.
+    """
+    import torch  # type: ignore[import]
+
+    if not nan_safe:
+        return tables
+    from aj.classical import compute_aj_normalization
+
+    mu, sigma = compute_aj_normalization(tables["I_plus"])
+    mu_t = torch.as_tensor(mu, dtype=torch.float32)
+    sigma_t = torch.as_tensor(sigma, dtype=torch.float32)
+    if device is not None:
+        mu_t = mu_t.to(device)
+        sigma_t = sigma_t.to(device)
+    else:
+        ref = tables.get("mu_t")
+        if torch.is_tensor(ref):
+            mu_t = mu_t.to(ref.device)
+            sigma_t = sigma_t.to(ref.device)
+    tables["mu_t"] = mu_t
+    tables["sigma_t"] = sigma_t
+    return tables
+
+
 def _forward_table_paths(base_dir: str | Path, genus: int) -> Tuple[Path, Path]:
     base = Path(base_dir)
     return (
@@ -213,20 +246,24 @@ def find_forward_tables_dir(
     tables_dir: Optional[str | Path] = None,
     data_root: str | Path = "./data",
     genus: int = 30,
+    subdir: Optional[str] = None,
 ) -> Optional[Path]:
     """
     Find a directory containing both forward AJ table files for the given genus.
 
     Search order:
       1) explicit `tables_dir` (if provided)
-      2) data_root
-      3) data_root/tables
-      4) data_root/AJ_Tables_g{genus}
+      2) data_root / subdir (if subdir is provided)
+      3) data_root
+      4) data_root/tables
+      5) data_root/AJ_Tables_g{genus}
     """
     candidates = []
     if tables_dir:
         candidates.append(Path(tables_dir))
-    droot = Path(data_root)
+    droot = Path(data_root).expanduser().resolve()
+    if subdir:
+        candidates.append(droot / subdir)
     candidates.extend([droot, droot / "tables", droot / f"AJ_Tables_g{genus}"])
 
     seen = set()
@@ -251,6 +288,8 @@ def build_and_save_forward_tables(
     i_max: float = 6.0,
     base_point: complex = complex(-8.0, -8.0),
     seed: int = 123,
+    radius: float = 4.0,
+    jitter: float = 0.25,
 ) -> Path:
     """
     Build forward AJ lookup tables with `aj.classical` and save them to disk.
@@ -271,7 +310,14 @@ def build_and_save_forward_tables(
     grid_r = np.linspace(r_min, r_max, grid_size)
     grid_i = np.linspace(i_min, i_max, grid_size)
     cuts = make_hyperelliptic_cuts(
-        genus, seed=seed, r_max=r_max, r_min=r_min, i_max=i_max, i_min=i_min
+        genus,
+        seed=seed,
+        radius=radius,
+        jitter=jitter,
+        r_max=r_max,
+        r_min=r_min,
+        i_max=i_max,
+        i_min=i_min,
     )
     branch_pts = np.array([z for a, b in cuts for z in (a, b)], dtype=np.complex128)
 
@@ -307,6 +353,199 @@ def build_and_save_forward_tables(
     return out
 
 
+def _atomic_torch_save(payload, path: str | Path) -> None:
+    import torch  # type: ignore[import]
+
+    p = Path(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    torch.save(payload, tmp)
+    tmp.replace(p)
+
+
+def _omega_eval_torch(t, k: int, branch_pts_t):
+    """
+    Evaluate omega_k(t) = t^k / sqrt(prod_j (t - a_j)) using torch complex tensors.
+    Supports vectorized `t` with arbitrary leading shape.
+    """
+    import torch  # type: ignore[import]
+
+    a = branch_pts_t.view(*([1] * t.ndim), -1)
+    prod = torch.prod(t.unsqueeze(-1) - a, dim=-1)
+    return torch.pow(t, k) / torch.sqrt(prod)
+
+
+def build_and_save_forward_tables_gpu_checkpointed(
+    out_dir: str | Path,
+    genus: int = 30,
+    grid_size: int = 96,
+    r_min: float = -6.0,
+    r_max: float = 6.0,
+    i_min: float = -6.0,
+    i_max: float = 6.0,
+    base_point: complex = complex(-8.0, -8.0),
+    seed: int = 123,
+    integration_steps: int = 128,
+    chunk_points: int = 2048,
+    save_every_chunks: int = 8,
+    resume: bool = True,
+    device=None,
+) -> Path:
+    """
+    Build forward AJ lookup tables with torch vectorization (GPU if available) and
+    save partial progress checkpoints to disk.
+
+    Notes
+    -----
+    - This is a fast approximate integrator (trapezoidal rule on straight-line paths),
+      unlike the mpmath high-precision `build_integral_table`.
+    - It is designed for practical throughput on large table builds.
+    """
+    import numpy as np
+    import torch  # type: ignore[import]
+    from aj.classical import make_hyperelliptic_cuts  # type: ignore[import]
+
+    out = Path(out_dir).expanduser().resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    ints_path, omeg_path = _forward_table_paths(out, genus)
+
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(device)
+    print(f"Building forward tables on device: {device}")
+
+    grid_r = np.linspace(r_min, r_max, grid_size).astype(np.float64)
+    grid_i = np.linspace(i_min, i_max, grid_size).astype(np.float64)
+    H = W = grid_size
+    N = H * W
+
+    cuts = make_hyperelliptic_cuts(
+        genus, seed=seed, r_max=r_max, r_min=r_min, i_max=i_max, i_min=i_min
+    )
+    branch_pts = np.array([z for a, b in cuts for z in (a, b)], dtype=np.complex128)
+    branch_pts_t = torch.as_tensor(branch_pts, dtype=torch.complex64, device=device)
+
+    rr, ii = np.meshgrid(grid_r, grid_i)
+    z_flat = torch.as_tensor((rr + 1j * ii).reshape(-1), dtype=torch.complex64, device=device)
+    base = torch.tensor(base_point, dtype=torch.complex64, device=device)
+    s = torch.linspace(0.0, 1.0, integration_steps, dtype=torch.float32, device=device)
+
+    # Resume / initialize omega table
+    if resume and omeg_path.is_file():
+        pkg = safe_torch_load(omeg_path, map_location="cpu")
+        Om_plus = pkg.get("omega_plus")
+        prog_o = pkg.get("progress", {"k_done": 0, "point_done": [0] * genus})
+        if Om_plus is None or int(pkg.get("genus", -1)) != genus:
+            Om_plus = torch.zeros((genus, H, W), dtype=torch.complex64)
+            prog_o = {"k_done": 0, "point_done": [0] * genus}
+        else:
+            Om_plus = Om_plus.to(torch.complex64)
+    else:
+        Om_plus = torch.zeros((genus, H, W), dtype=torch.complex64)
+        prog_o = {"k_done": 0, "point_done": [0] * genus}
+
+    Om_flat = Om_plus.view(genus, -1)
+    print(f"Omega progress: k_done={prog_o['k_done']}/{genus}")
+
+    for k in range(int(prog_o["k_done"]), genus):
+        start = int(prog_o["point_done"][k])
+        n_chunks = 0
+        for idx in range(start, N, chunk_points):
+            j = min(idx + chunk_points, N)
+            z = z_flat[idx:j]
+            vals = _omega_eval_torch(z, k, branch_pts_t)
+            Om_flat[k, idx:j] = vals.detach().cpu()
+            prog_o["point_done"][k] = j
+            n_chunks += 1
+            if n_chunks % max(1, save_every_chunks) == 0:
+                _atomic_torch_save(
+                    {
+                        "genus": int(genus),
+                        "grid_r": grid_r,
+                        "grid_i": grid_i,
+                        "branch_pts": branch_pts,
+                        "omega_plus": Om_plus,
+                        "progress": prog_o,
+                    },
+                    omeg_path,
+                )
+                print(f"Saved omega partial: k={k}, points={j}/{N}")
+        prog_o["k_done"] = k + 1
+        _atomic_torch_save(
+            {
+                "genus": int(genus),
+                "grid_r": grid_r,
+                "grid_i": grid_i,
+                "branch_pts": branch_pts,
+                "omega_plus": Om_plus,
+                "progress": prog_o,
+            },
+            omeg_path,
+        )
+        print(f"Omega done for k={k} ({k+1}/{genus})")
+
+    # Resume / initialize integral table
+    if resume and ints_path.is_file():
+        pkg = safe_torch_load(ints_path, map_location="cpu")
+        I_plus = pkg.get("I_plus")
+        prog_i = pkg.get("progress", {"k_done": 0, "point_done": [0] * genus})
+        if I_plus is None or int(pkg.get("genus", -1)) != genus:
+            I_plus = torch.zeros((genus, H, W), dtype=torch.complex64)
+            prog_i = {"k_done": 0, "point_done": [0] * genus}
+        else:
+            I_plus = I_plus.to(torch.complex64)
+    else:
+        I_plus = torch.zeros((genus, H, W), dtype=torch.complex64)
+        prog_i = {"k_done": 0, "point_done": [0] * genus}
+
+    I_flat = I_plus.view(genus, -1)
+    print(f"Integral progress: k_done={prog_i['k_done']}/{genus}")
+
+    for k in range(int(prog_i["k_done"]), genus):
+        start = int(prog_i["point_done"][k])
+        n_chunks = 0
+        for idx in range(start, N, chunk_points):
+            j = min(idx + chunk_points, N)
+            z = z_flat[idx:j]  # (B,)
+            dz = (z - base).unsqueeze(1)  # (B,1)
+            t = base + dz * s.unsqueeze(0)  # (B,Q)
+            omega_t = _omega_eval_torch(t, k, branch_pts_t)  # (B,Q)
+            integrand = omega_t * dz  # (B,Q)
+            vals = torch.trapz(integrand, s, dim=1)  # (B,)
+            I_flat[k, idx:j] = vals.detach().cpu()
+            prog_i["point_done"][k] = j
+            n_chunks += 1
+            if n_chunks % max(1, save_every_chunks) == 0:
+                _atomic_torch_save(
+                    {
+                        "genus": int(genus),
+                        "grid_r": grid_r,
+                        "grid_i": grid_i,
+                        "branch_pts": branch_pts,
+                        "I_plus": I_plus,
+                        "progress": prog_i,
+                    },
+                    ints_path,
+                )
+                print(f"Saved integral partial: k={k}, points={j}/{N}")
+        prog_i["k_done"] = k + 1
+        _atomic_torch_save(
+            {
+                "genus": int(genus),
+                "grid_r": grid_r,
+                "grid_i": grid_i,
+                "branch_pts": branch_pts,
+                "I_plus": I_plus,
+                "progress": prog_i,
+            },
+            ints_path,
+        )
+        print(f"Integral done for k={k} ({k+1}/{genus})")
+
+    print(f"Saved forward tables to {out}")
+    return out
+
+
 def get_or_build_forward_tables(
     device,
     tables_dir: Optional[str | Path] = None,
@@ -320,19 +559,28 @@ def get_or_build_forward_tables(
     i_max: float = 6.0,
     base_point: complex = complex(-8.0, -8.0),
     seed: int = 123,
+    radius: float = 4.0,
+    jitter: float = 0.25,
+    tables_subdir: Optional[str] = None,
 ):
     """
     Dataset-style forward-table loader:
       - If `tables_dir` is valid, load from there.
-      - Else search common paths under `data_root`.
+      - Else search common paths under `data_root` (and `data_root/tables_subdir` if set).
       - If still missing and `auto_build=True`, compute + save tables, then load.
+
+    Use `tables_subdir` (e.g. "AJ_Tables_g2_spiral_s123_r4_j0.25_b4") to cache
+    spiral or other config-specific tables separately from the default genus cache.
     """
-    found = find_forward_tables_dir(tables_dir=tables_dir, data_root=data_root, genus=genus)
+    droot = Path(data_root).expanduser().resolve()
+    found = find_forward_tables_dir(
+        tables_dir=tables_dir, data_root=data_root, genus=genus, subdir=tables_subdir
+    )
     if found is None and auto_build:
         target = (
             Path(tables_dir).expanduser().resolve()
             if tables_dir
-            else (Path(data_root).expanduser().resolve() / f"AJ_Tables_g{genus}")
+            else (droot / (tables_subdir or f"AJ_Tables_g{genus}"))
         )
         found = build_and_save_forward_tables(
             target,
@@ -344,174 +592,50 @@ def get_or_build_forward_tables(
             i_max=i_max,
             base_point=base_point,
             seed=seed,
+            radius=radius,
+            jitter=jitter,
         )
     if found is None:
         raise FileNotFoundError(
             "Forward AJ tables not found. Provide tables_dir or enable auto_build."
         )
-    return load_forward_tables(found, device), found
+    return load_forward_tables(found, device, genus=genus), found
 
 
-def build_forward_model(tables_data: dict, device, embed_dim: int = 4, K: int = 2):
-    """Build AJMNIST_AxisPeriodic on device."""
+def tables_for_spiral_forward(tables: dict) -> dict:
+    """
+    Convert loaded forward tables (from load_forward_tables) to the dict format
+    expected by ForwardAJ2D in the spiral notebook (numpy arrays, keys I_plus,
+    omega_plus, grid_r, grid_i, branch_pts, mu, sigma).
+    """
     import numpy as np
     import torch  # type: ignore[import]
-    import torch.nn as nn  # type: ignore[import]
-    import torch.nn.functional as F  # type: ignore[import]
 
-    class AJGridActivationNorm(nn.Module):
-        def __init__(self, I_plus, Om_plus, grid_r, grid_i, branch_pts, mu, sigma):
-            super().__init__()
-            self.g = I_plus.shape[0]
-            self.register_buffer("I_plus", _pack_complex_table(I_plus))
-            self.register_buffer("Om_plus", _pack_complex_table(Om_plus))
-            self.register_buffer("mu", mu.view(1, 1, -1))
-            self.register_buffer("sigma", sigma.view(1, 1, -1))
-            self.gamma = nn.Parameter(torch.tensor(1.0))
-            self.register_buffer("r_min", torch.tensor(float(grid_r.min())))
-            self.register_buffer("r_max", torch.tensor(float(grid_r.max())))
-            self.register_buffer("i_min", torch.tensor(float(grid_i.min())))
-            self.register_buffer("i_max", torch.tensor(float(grid_i.max())))
-            self.register_buffer("bp_real", branch_pts.real.float())
-            self.register_buffer("bp_imag", branch_pts.imag.float())
+    def to_np(x):
+        if torch.is_tensor(x):
+            return x.cpu().numpy()
+        return np.asarray(x)
 
-        def _map_raw_to_bounds(self, raw_xy):
-            xr = self.r_min + (self.r_max - self.r_min) * torch.sigmoid(raw_xy[..., 0])
-            yi = self.i_min + (self.i_max - self.i_min) * torch.sigmoid(raw_xy[..., 1])
-            return xr, yi
+    branch_pts = tables["branch_pts_t"]
+    if torch.is_tensor(branch_pts):
+        bp = branch_pts.cpu().numpy()
+        if bp.dtype.kind != "c":
+            bp = bp[:, 0] + 1j * bp[:, 1]
+    else:
+        bp = np.asarray(branch_pts)
+        if bp.dtype.kind != "c" and bp.ndim == 2 and bp.shape[1] == 2:
+            bp = bp[:, 0] + 1j * bp[:, 1]
 
-        def _norm_to_grid(self, xr, yi):
-            gx = 2.0 * (xr - self.r_min) / (self.r_max - self.r_min) - 1.0
-            gy = 2.0 * (yi - self.i_min) / (self.i_max - self.i_min) - 1.0
-            return gx, gy
-
-        def forward(self, raw_xy: torch.Tensor, sheet_logits: torch.Tensor, return_aux=True):
-            B, g, _ = raw_xy.shape
-            assert g == self.g
-            xr, yi = self._map_raw_to_bounds(raw_xy)
-            gx, gy = self._norm_to_grid(xr, yi)
-            grid = torch.stack([gx, gy], dim=-1).view(B * g, 1, 1, 2)
-            I = F.grid_sample(
-                self.I_plus.expand(B * g, -1, -1, -1),
-                grid, mode="bilinear", align_corners=True
-            ).view(B, g, -1)
-            I_std = (I - self.mu) / self.sigma
-            sign = torch.tanh(sheet_logits).unsqueeze(-1)
-            contrib = sign * I_std
-            coords = self.gamma * contrib.sum(dim=1)
-            aux = None
-            if return_aux:
-                margin = 0.95
-                bpen = ((gx.abs() - margin).clamp_min(0) ** 2 + (gy.abs() - margin).clamp_min(0) ** 2).mean()
-                dx = xr.unsqueeze(-1) - self.bp_real
-                dy = yi.unsqueeze(-1) - self.bp_imag
-                d2 = dx * dx + dy * dy
-                tau = 0.07
-                rpen = torch.exp(-d2 / (2 * tau * tau)).mean()
-                aux = {"bound_penalty": bpen, "branch_penalty": rpen}
-            return coords, aux
-
-    class AJMNIST_Anchored(nn.Module):
-        def __init__(self, genus, I_plus, Om_plus, grid_r, grid_i, branch_pts,
-                     anchors_xy, mu, sigma, embed_dim=8):
-            super().__init__()
-            self.genus = genus
-            self.conv = nn.Sequential(
-                nn.Conv2d(1, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
-                nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
-                nn.AdaptiveAvgPool2d((1, 1)),
-            )
-            self.embed = nn.Parameter(torch.empty(genus, embed_dim))
-            nn.init.uniform_(self.embed, -2.0, 2.0)
-            self.point_head = nn.Linear(64 + embed_dim, 3, bias=False)
-            nn.init.xavier_uniform_(self.point_head.weight)
-            self.point_bias = nn.Parameter(torch.zeros(genus, 3))
-            self.aj = AJGridActivationNorm(I_plus, Om_plus, grid_r, grid_i, branch_pts, mu, sigma)
-            self.classifier = nn.Linear(2 * genus, 10)
-            rmin, rmax = float(grid_r.min()), float(grid_r.max())
-            imin, imax = float(grid_i.min()), float(grid_i.max())
-
-            def logit(p):
-                p = np.clip(p, 1e-6, 1 - 1e-6)
-                return float(np.log(p / (1 - p)))
-
-            with torch.no_grad():
-                for i in range(genus):
-                    x0, y0 = float(anchors_xy[i, 0]), float(anchors_xy[i, 1])
-                    px = (x0 - rmin) / (rmax - rmin)
-                    py = (y0 - imin) / (imax - imin)
-                    self.point_bias[i, 0] = logit(np.array(px))
-                    self.point_bias[i, 1] = logit(np.array(py))
-                    target_sign = 0.8 if (i % 2 == 0) else -0.8
-                    self.point_bias[i, 2] = float(torch.atanh(torch.tensor(target_sign)))
-
-        def forward(self, x, return_aux=False):
-            B = x.size(0)
-            h = self.conv(x).view(B, -1)
-            h_exp = h.unsqueeze(1).expand(-1, self.genus, -1)
-            emb = self.embed.unsqueeze(0).expand(B, -1, -1)
-            out = self.point_head(torch.cat([h_exp, emb], dim=2)) + self.point_bias.unsqueeze(0)
-            raw_xy, sheet_logits = out[..., :2], out[..., 2]
-            coords, aux = self.aj(raw_xy, sheet_logits, return_aux=True)
-            logits = self.classifier(coords)
-            if return_aux:
-                return logits, aux
-            return logits
-
-    class TorusFeatures(nn.Module):
-        def __init__(self, dim: int, K: int = 2, freqs=None, learnable: bool = False):
-            super().__init__()
-            if freqs is None:
-                freqs = torch.tensor([0.5, 1.0], dtype=torch.float32)[:K]
-            else:
-                freqs = torch.as_tensor(freqs, dtype=torch.float32)[:K]
-            if learnable:
-                self.freqs = nn.Parameter(freqs)
-            else:
-                self.register_buffer("freqs", freqs)
-            self.dim, self.K = dim, len(freqs)
-
-        def forward(self, u):
-            B, D = u.shape
-            f = self.freqs.view(1, 1, -1).to(u.device)
-            ang = u.unsqueeze(-1) * f
-            return torch.cat([torch.cos(ang), torch.sin(ang)], dim=-1).view(B, D * 2 * self.K)
-
-    class AJMNIST_AxisPeriodic(nn.Module):
-        def __init__(self, genus, I_plus, Om_plus, grid_r, grid_i, branch_pts,
-                     anchors_xy, mu, sigma, embed_dim=8, K=2, learnable_freqs=False):
-            super().__init__()
-            self.base = AJMNIST_Anchored(
-                genus, I_plus, Om_plus, grid_r, grid_i, branch_pts,
-                anchors_xy, mu, sigma, embed_dim=embed_dim,
-            )
-            D = 2 * genus
-            self.torus = TorusFeatures(D, K=K, learnable=learnable_freqs)
-            self.classifier = nn.Linear(D * 2 * K, 10)
-
-        def forward(self, x, return_aux=False):
-            B = x.size(0)
-            h = self.base.conv(x).view(B, -1)
-            h_exp = h.unsqueeze(1).expand(-1, self.base.genus, -1)
-            emb = self.base.embed.unsqueeze(0).expand(B, -1, -1)
-            out = self.base.point_head(torch.cat([h_exp, emb], dim=2)) + self.base.point_bias.unsqueeze(0)
-            raw_xy, sheet_logits = out[..., :2], out[..., 2]
-            coords, aux = self.base.aj(raw_xy, sheet_logits, return_aux=True)
-            feats = self.torus(coords)
-            logits = self.classifier(feats)
-            if return_aux:
-                return logits, aux
-            return logits
-
-    return AJMNIST_AxisPeriodic(
-        tables_data["genus"],
-        tables_data["I_plus"], tables_data["Om_plus"],
-        tables_data["grid_r"], tables_data["grid_i"],
-        tables_data["branch_pts_t"],
-        tables_data["anchors_xy_t"],
-        tables_data["mu_t"], tables_data["sigma_t"],
-        embed_dim=embed_dim, K=K, learnable_freqs=False,
-    ).to(device)
+    return {
+        "genus": int(tables["genus"]),
+        "I_plus": to_np(tables["I_plus"]),
+        "omega_plus": to_np(tables["Om_plus"]),
+        "grid_r": to_np(tables["grid_r"]),
+        "grid_i": to_np(tables["grid_i"]),
+        "branch_pts": bp,
+        "mu": to_np(tables["mu_t"]).astype(np.float32),
+        "sigma": to_np(tables["sigma_t"]).astype(np.float32),
+    }
 
 
 def eval_epoch(model, loader, device) -> Tuple[float, float]:

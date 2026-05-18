@@ -1,3 +1,24 @@
+Metadata-Version: 2.4
+Name: abel-jacobi-networks
+Version: 0.1.0
+Summary: Tropical and classical Abel-Jacobi maps on hyperelliptic curves
+Author: Abel-Jacobi Networks
+License: Proprietary
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.20
+Requires-Dist: matplotlib>=3.5
+Requires-Dist: networkx>=2.6
+Requires-Dist: mpmath>=1.2
+Requires-Dist: tqdm>=4.60
+Provides-Extra: torch
+Requires-Dist: torch>=1.12; extra == "torch"
+Requires-Dist: torchvision>=0.13; extra == "torch"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: jupyter; extra == "dev"
+Requires-Dist: ipykernel; extra == "dev"
+
 # Abel–Jacobi Networks
 
 Research code for **tropical** and **classical** Abel–Jacobi maps on hyperelliptic curves, with applications to metric graphs, period integrals, and neural network training.

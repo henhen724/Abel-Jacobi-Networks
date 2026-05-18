@@ -40,6 +40,21 @@ from .inverse_abel_jacobi_map import (
 )
 
 
+def _to_mpc(z):
+    """Convert numpy/Python complex to mpmath mpc. Avoids TypeError: cannot create mpf from complex."""
+    if hasattr(mp, "mpc") and isinstance(z, (mp.mpc, mp.mpf)):
+        return z if isinstance(z, mp.mpc) else mp.mpc(z)
+    c = complex(z)
+    return mp.mpc(c.real, c.imag)
+
+
+def _to_mpf(r):
+    """Convert numpy/Python real to mpmath mpf."""
+    if hasattr(mp, "mpf") and isinstance(r, (mp.mpf, mp.mpc)):
+        return mp.mpf(r) if isinstance(r, mp.mpf) else mp.mpf(r.real)
+    return mp.mpf(float(r))
+
+
 def make_omega_xn_dx(branch_points):
     """
     Holomorphic differentials ω_k = x^k dx / y where y^2 = prod(x - a_i).
@@ -59,13 +74,12 @@ def make_omega_xn_dx(branch_points):
     """
     if not HAS_MPMATH:
         raise ImportError("mpmath required for differentials")
-    pts = list(branch_points)
+    pts = [_to_mpc(a) for a in branch_points]
 
     def omega_k(k, x):
-        x = mp.mpc(x) if not isinstance(x, (mp.mpc, mp.mpf)) else x
+        x = _to_mpc(x)
         prod = mp.mpf(1)
         for a in pts:
-            a = mp.mpc(a)
             prod *= (x - a)
         return x**k / mp.sqrt(prod)
 
@@ -76,12 +90,14 @@ def integrate_omega_xn_dx(omega_fn, k, z, base_point):
     """Integrate ω_k = x^k dx / y from base_point to z."""
     if not HAS_MPMATH:
         raise ImportError("mpmath required")
+    base_mp = _to_mpc(base_point)
+    z_mp = _to_mpc(z)
     try:
-        result = mp.quad(lambda t: omega_fn(k, t), [base_point, z])
+        result = mp.quad(lambda t: omega_fn(k, t), [base_mp, z_mp])
         return complex(result)
     except Exception:
-        eps = 1e-12 + 1e-12j
-        return complex(mp.quad(lambda t: omega_fn(k, t), [base_point, z + eps]))
+        eps = _to_mpc(1e-12 + 1e-12j)
+        return complex(mp.quad(lambda t: omega_fn(k, t), [base_mp, z_mp + eps]))
 
 
 def compute_period_matrix_hyperelliptic(
@@ -136,22 +152,19 @@ def compute_period_matrix_hyperelliptic(
         cycles_a = []
         cycles_b = []
         for i in range(genus):
-            # a-cycle: circle around the i-th cut
             a_start, a_end = branch_pts[2*i], branch_pts[2*i+1]
             center_a = (a_start + a_end) / 2
             radius_a = 0.6 * abs(a_start - a_end) / 2
-            cycles_a.append(("circle", center_a, radius_a))
+            cycles_a.append(("circle", _to_mpc(center_a), _to_mpf(radius_a)))
 
-            # b-cycle: path from cut i to cut i+1 (or to infinity for last)
             if i < genus - 1:
                 b_start = (branch_pts[2*i] + branch_pts[2*i+1]) / 2
                 b_end = (branch_pts[2*(i+1)] + branch_pts[2*(i+1)+1]) / 2
-                cycles_b.append(("line", b_start, b_end))
+                cycles_b.append(("line", _to_mpc(b_start), _to_mpc(b_end)))
             else:
-                # Last b-cycle: from last cut to a point far away
                 b_start = (branch_pts[2*i] + branch_pts[2*i+1]) / 2
-                b_end = base_point + 10.0  # Far from branch points
-                cycles_b.append(("line", b_start, b_end))
+                b_end = base_point + 10.0
+                cycles_b.append(("line", _to_mpc(b_start), _to_mpc(b_end)))
 
     # Compute a-periods: Ω_1 (g×g)
     Omega_1 = np.zeros((genus, genus), dtype=np.complex128)
@@ -160,8 +173,10 @@ def compute_period_matrix_hyperelliptic(
             _, center, radius = cycle_a
             for k in range(genus):
                 def integrand(phi):
-                    t = center + radius * mp.exp(1j * phi)
-                    return radius * 1j * mp.exp(1j * phi) * omega_fn(k, t)
+                    # Use only mpmath types so quad does not try mpf(complex)
+                    t = center + radius * mp.exp(mp.mpc(0, phi))
+                    j_mp = mp.mpc(0, 1)
+                    return radius * j_mp * mp.exp(mp.mpc(0, phi)) * omega_fn(k, t)
                 Omega_1[k, i] = complex(mp.quad(integrand, [0, 2*mp.pi], maxdegree=20))
         else:
             raise NotImplementedError("Only circular a-cycles implemented")

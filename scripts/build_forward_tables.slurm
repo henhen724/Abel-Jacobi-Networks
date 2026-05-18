@@ -8,9 +8,9 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:0
+#SBATCH --gres=gpu:1
 #
-# Build (or load) forward AJ lookup tables using src.util data-loader logic.
+# Build (or load) forward AJ lookup tables using GPU-parallel + checkpoint logic.
 #
 # Optional env overrides:
 #   DATA_ROOT      - dataset root (default: $PWD/data)
@@ -20,6 +20,9 @@
 #   AUTO_BUILD     - 1 (default) build tables if not found, 0 to fail if missing
 #   FORCE_REBUILD  - 1 to rebuild even if files already exist
 #   R_MIN,R_MAX,I_MIN,I_MAX,SEED
+#   INTEGRATION_STEPS - trapezoid steps for integral approximation (default: 128)
+#   CHUNK_POINTS      - number of grid points per GPU chunk (default: 2048)
+#   SAVE_EVERY_CHUNKS - checkpoint frequency (default: 8)
 #
 # Submit:
 #   sbatch scripts/build_forward_tables.slurm
@@ -34,6 +37,7 @@ cd "$REPO_ROOT"
 source "$HOME/activate_aj_env.sh"
 
 export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
+export PYTHONUNBUFFERED=1
 
 DATA_ROOT="${DATA_ROOT:-$PWD/data}"
 TABLES_DIR="${TABLES_DIR:-}"
@@ -46,9 +50,12 @@ R_MAX="${R_MAX:-6.0}"
 I_MIN="${I_MIN:--6.0}"
 I_MAX="${I_MAX:-6.0}"
 SEED="${SEED:-123}"
+INTEGRATION_STEPS="${INTEGRATION_STEPS:-128}"
+CHUNK_POINTS="${CHUNK_POINTS:-2048}"
+SAVE_EVERY_CHUNKS="${SAVE_EVERY_CHUNKS:-8}"
 
 export DATA_ROOT TABLES_DIR GENUS GRID_SIZE AUTO_BUILD FORCE_REBUILD
-export R_MIN R_MAX I_MIN I_MAX SEED
+export R_MIN R_MAX I_MIN I_MAX SEED INTEGRATION_STEPS CHUNK_POINTS SAVE_EVERY_CHUNKS
 
 echo "=== AJ Forward Table Build ==="
 echo "Repo root     : $REPO_ROOT"
@@ -58,9 +65,12 @@ echo "Genus         : $GENUS"
 echo "Grid size     : $GRID_SIZE"
 echo "Auto build    : $AUTO_BUILD"
 echo "Force rebuild : $FORCE_REBUILD"
+echo "Int steps     : $INTEGRATION_STEPS"
+echo "Chunk points  : $CHUNK_POINTS"
+echo "Save every    : $SAVE_EVERY_CHUNKS chunks"
 echo ""
 
-python3 - <<'PY'
+python3 -u - <<'PY'
 import os
 from pathlib import Path
 
@@ -80,14 +90,20 @@ r_max = float(os.environ["R_MAX"])
 i_min = float(os.environ["I_MIN"])
 i_max = float(os.environ["I_MAX"])
 seed = int(os.environ["SEED"])
+integration_steps = int(os.environ["INTEGRATION_STEPS"])
+chunk_points = int(os.environ["CHUNK_POINTS"])
+save_every_chunks = int(os.environ["SAVE_EVERY_CHUNKS"])
 
-# Tables are generated/loaded on CPU.
-device = torch.device("cpu")
+build_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Build device: {build_device}")
+load_device = torch.device("cpu")
+
+found = aj_util.find_forward_tables_dir(tables_dir=tables_dir, data_root=data_root, genus=genus)
 
 if force_rebuild:
     target = tables_dir if tables_dir is not None else (data_root / f"AJ_Tables_g{genus}")
     print(f"FORCE_REBUILD=1: rebuilding tables in {target}")
-    aj_util.build_and_save_forward_tables(
+    found = aj_util.build_and_save_forward_tables_gpu_checkpointed(
         out_dir=target,
         genus=genus,
         grid_size=grid_size,
@@ -96,34 +112,38 @@ if force_rebuild:
         i_min=i_min,
         i_max=i_max,
         seed=seed,
-    )
-    tables, found_dir = aj_util.get_or_build_forward_tables(
-        device=device,
-        tables_dir=target,
-        data_root=data_root,
-        genus=genus,
-        auto_build=False,
-        grid_size=grid_size,
-        r_min=r_min,
-        r_max=r_max,
-        i_min=i_min,
-        i_max=i_max,
-        seed=seed,
+        integration_steps=integration_steps,
+        chunk_points=chunk_points,
+        save_every_chunks=save_every_chunks,
+        resume=True,
+        device=build_device,
     )
 else:
-    tables, found_dir = aj_util.get_or_build_forward_tables(
-        device=device,
-        tables_dir=tables_dir,
-        data_root=data_root,
-        genus=genus,
-        auto_build=auto_build,
-        grid_size=grid_size,
-        r_min=r_min,
-        r_max=r_max,
-        i_min=i_min,
-        i_max=i_max,
-        seed=seed,
-    )
+    if found is None and auto_build:
+        target = tables_dir if tables_dir is not None else (data_root / f"AJ_Tables_g{genus}")
+        print(f"No existing tables found; building in {target}")
+        found = aj_util.build_and_save_forward_tables_gpu_checkpointed(
+            out_dir=target,
+            genus=genus,
+            grid_size=grid_size,
+            r_min=r_min,
+            r_max=r_max,
+            i_min=i_min,
+            i_max=i_max,
+            seed=seed,
+            integration_steps=integration_steps,
+            chunk_points=chunk_points,
+            save_every_chunks=save_every_chunks,
+            resume=True,
+            device=build_device,
+        )
+    elif found is None:
+        raise FileNotFoundError("Forward AJ tables not found and AUTO_BUILD=0.")
+
+tables = aj_util.load_forward_tables(found, load_device, genus=genus)
+if tables is None:
+    raise RuntimeError(f"Failed to load tables from {found}")
+found_dir = found
 
 print(f"Using forward tables directory: {found_dir}")
 print(f"Loaded genus: {tables['genus']}")

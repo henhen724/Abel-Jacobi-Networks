@@ -37,6 +37,8 @@ __all__ = [
     "build_integral_table",
     "abel_jacobi_forward",
     "compute_aj_normalization",
+    "AJGridActivationNorm",
+    "pack_complex_table",
     "period_matrix_from_cycles",
     "riemann_theta",
     "grad_riemann_theta",
@@ -56,3 +58,19 @@ __all__ = [
     "make_omega_xn_dx",
     "integrate_omega_xn_dx",
 ]
+
+# Torch-only helpers (lazy import so `import aj.classical` works without torch).
+_LAZY_TORCH_EXPORTS = {
+    "AJGridActivationNorm": ("grid_activation", "AJGridActivationNorm"),
+    "pack_complex_table": ("grid_activation", "pack_complex_table"),
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_TORCH_EXPORTS:
+        mod_name, attr = _LAZY_TORCH_EXPORTS[name]
+        from importlib import import_module
+
+        mod = import_module(f".{mod_name}", __name__)
+        return getattr(mod, attr)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
