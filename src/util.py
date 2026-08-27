@@ -89,7 +89,7 @@ def get_mnist_loaders(
     test_ds = torchvision.datasets.MNIST(root=os.fspath(root), train=False, download=True, transform=tfm)
 
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=128, shuffle=False, num_workers=num_workers
+        train_ds, batch_size=128, shuffle=True, num_workers=num_workers
     )
     test_loader = torch.utils.data.DataLoader(
         test_ds, batch_size=test_batch_size, shuffle=False, num_workers=num_workers
@@ -636,6 +636,122 @@ def tables_for_spiral_forward(tables: dict) -> dict:
         "mu": to_np(tables["mu_t"]).astype(np.float32),
         "sigma": to_np(tables["sigma_t"]).astype(np.float32),
     }
+
+
+def forward_aj_adamw_param_groups(
+    model,
+    lr_base: float = 3e-4,
+    lr_fast: float = 1e-3,
+):
+    """
+    AdamW parameter groups for MNIST forward AJ models (two-tier LR).
+
+    Matches ``notebooks/AJ_training_genus30.ipynb``:
+
+    - **base** (``lr_base``): CNN trunk + ``AJGridActivationNorm`` (incl. learnable ``gamma``).
+    - **fast** (``lr_fast``): ``point_head``, ``point_bias``, final classifier; for
+      axis-periodic models, also ``TorusFeatures`` (same as genus30 notebook).
+
+    Expects ``AJMNIST_Anchored`` or ``AJMNIST_AxisPeriodic`` as built in
+    ``notebooks/aj_networks_train.ipynb`` (``AxisPeriodic`` has a ``.base`` submodule).
+    """
+    if hasattr(model, "base"):
+        m = model.base
+        fast_params = (
+            list(m.point_head.parameters())
+            + [m.point_bias]
+            + list(model.torus.parameters())
+            + list(model.classifier.parameters())
+        )
+        base_params = list(m.conv.parameters()) + list(m.aj.parameters())
+    elif hasattr(model, "point_head") and hasattr(model, "aj"):
+        fast_params = (
+            list(model.point_head.parameters())
+            + [model.point_bias]
+            + list(model.classifier.parameters())
+        )
+        base_params = list(model.conv.parameters()) + list(model.aj.parameters())
+    else:
+        raise TypeError(
+            "forward_aj_adamw_param_groups: expected AJMNIST_Anchored or "
+            "AJMNIST_AxisPeriodic (with point_head/aj or .base)"
+        )
+    return [
+        {"params": base_params, "lr": lr_base},
+        {"params": fast_params, "lr": lr_fast},
+    ]
+
+
+def forward_aj_adamw(
+    model,
+    lr_base: float = 3e-4,
+    lr_fast: float = 1e-3,
+    weight_decay: float = 1e-4,
+):
+    """``torch.optim.AdamW`` with ``forward_aj_adamw_param_groups``."""
+    import torch.optim as optim  # type: ignore[import]
+
+    return optim.AdamW(
+        forward_aj_adamw_param_groups(model, lr_base=lr_base, lr_fast=lr_fast),
+        weight_decay=weight_decay,
+    )
+
+
+def train_forward_aj_epoch_amp(
+    model,
+    loader,
+    optimizer,
+    device,
+    *,
+    clip: float = 1.0,
+    lam_branch: float = 1e-3,
+    lam_bound: float = 1e-3,
+    scaler=None,
+    use_amp: Optional[bool] = None,
+) -> Tuple[float, float]:
+    """
+    One training epoch for forward AJ models (matches ``AJ_training_genus30.ipynb``).
+
+    Uses mixed precision on CUDA when ``use_amp`` is True (default: cuda available).
+    """
+    import torch  # type: ignore[import]
+    import torch.nn as nn  # type: ignore[import]
+
+    if use_amp is None:
+        use_amp = device.type == "cuda"
+    if scaler is None and use_amp:
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
+    ce = nn.CrossEntropyLoss()
+    model.train()
+    tot, correct, n = 0.0, 0, 0
+    for x, y in loader:
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
+        optimizer.zero_grad(set_to_none=True)
+        with torch.cuda.amp.autocast(enabled=use_amp):
+            logits, aux = model(x, return_aux=True)
+            loss = ce(logits, y)
+            if aux is not None:
+                loss = loss + lam_branch * aux.get("branch_penalty", 0.0) + lam_bound * aux.get(
+                    "bound_penalty", 0.0
+                )
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            if clip is not None:
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), clip)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if clip is not None:
+                nn.utils.clip_grad_norm_(model.parameters(), clip)
+            optimizer.step()
+        tot += loss.item() * x.size(0)
+        correct += (logits.argmax(1) == y).sum().item()
+        n += x.size(0)
+    return tot / n, 100.0 * correct / n
 
 
 def eval_epoch(model, loader, device) -> Tuple[float, float]:

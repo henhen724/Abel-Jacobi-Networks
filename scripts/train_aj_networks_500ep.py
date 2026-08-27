@@ -85,6 +85,55 @@ class AJMNIST_Anchored(nn.Module):
         return logits
 
 
+class TorusFeatures(nn.Module):
+    def __init__(self, dim: int, K: int = 2, freqs=None, learnable: bool = False):
+        super().__init__()
+        if freqs is None:
+            freqs = torch.tensor([0.5, 1.0], dtype=torch.float32)[:K]
+        else:
+            freqs = torch.as_tensor(freqs, dtype=torch.float32)[:K]
+        if learnable:
+            self.freqs = nn.Parameter(freqs)
+        else:
+            self.register_buffer("freqs", freqs)
+        self.dim, self.K = dim, len(freqs)
+
+    def forward(self, u):
+        B, D = u.shape
+        f = self.freqs.view(1, 1, -1).to(u.device)
+        ang = u.unsqueeze(-1) * f
+        return torch.cat([torch.cos(ang), torch.sin(ang)], dim=-1).view(B, D * 2 * self.K)
+
+
+class AJMNIST_AxisPeriodic(nn.Module):
+    def __init__(
+        self, genus, I_plus, Om_plus, grid_r, grid_i, branch_pts, anchors_xy, mu, sigma,
+        embed_dim=4, K=2, learnable_freqs=False,
+    ):
+        super().__init__()
+        self.base = AJMNIST_Anchored(
+            genus, I_plus, Om_plus, grid_r, grid_i, branch_pts, anchors_xy, mu, sigma,
+            embed_dim=embed_dim,
+        )
+        D = 2 * genus
+        self.torus = TorusFeatures(D, K=K, learnable=learnable_freqs)
+        self.classifier = nn.Linear(D * 2 * K, 10)
+
+    def forward(self, x, return_aux=False):
+        B = x.size(0)
+        h = self.base.conv(x).view(B, -1)
+        h_exp = h.unsqueeze(1).expand(-1, self.base.genus, -1)
+        emb = self.base.embed.unsqueeze(0).expand(B, -1, -1)
+        out = self.base.point_head(torch.cat([h_exp, emb], dim=2)) + self.base.point_bias.unsqueeze(0)
+        raw_xy, sheet_logits = out[..., :2], out[..., 2]
+        coords, aux = self.base.aj(raw_xy, sheet_logits, return_aux=True)
+        feats = self.torus(coords)
+        logits = self.classifier(feats)
+        if return_aux:
+            return logits, aux
+        return logits
+
+
 def _branch_points_from_tables(tables):
     bp = tables["branch_pts_t"]
     if torch.is_complex(bp):
@@ -200,8 +249,8 @@ def main():
         grid_size=96,
     )
     print(f"Tables from: {tables_found}")
-    aj_util.refresh_forward_table_normalization(tables, device=device)
-    model_fwd = AJMNIST_Anchored(
+    # Use mu_t/sigma_t from load_forward_tables (same as AJ_training_genus30.ipynb).
+    model_fwd = AJMNIST_AxisPeriodic(
         genus=tables["genus"],
         I_plus=tables["I_plus"],
         Om_plus=tables["Om_plus"],
@@ -211,26 +260,23 @@ def main():
         anchors_xy=tables["anchors_xy_t"],
         mu=tables["mu_t"],
         sigma=tables["sigma_t"],
+        embed_dim=4,
+        K=2,
+        learnable_freqs=False,
     ).to(device)
-    opt_fwd = torch.optim.AdamW(model_fwd.parameters(), lr=3e-4, weight_decay=1e-4)
+    opt_fwd = aj_util.forward_aj_adamw(model_fwd, lr_base=3e-4, lr_fast=1e-3, weight_decay=1e-4)
+    use_amp = device.type == "cuda"
+    fwd_scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     for ep in range(1, args.epochs + 1):
-        model_fwd.train()
-        tot, correct, count = 0.0, 0, 0
-        for x, y in train_loader:
-            x, y = x.to(device), y.to(device)
-            opt_fwd.zero_grad(set_to_none=True)
-            logits, aux = model_fwd(x, return_aux=True)
-            loss = ce(logits, y)
-            if aux:
-                loss = loss + 1e-3 * aux.get("branch_penalty", 0.0) + 1e-3 * aux.get("bound_penalty", 0.0)
-            loss.backward()
-            nn.utils.clip_grad_norm_(model_fwd.parameters(), 1.0)
-            opt_fwd.step()
-            tot += loss.item() * x.size(0)
-            correct += (logits.argmax(1) == y).sum().item()
-            count += x.size(0)
-        tr_loss, tr_acc = tot / count, 100.0 * correct / count
+        tr_loss, tr_acc = aj_util.train_forward_aj_epoch_amp(
+            model_fwd,
+            train_loader,
+            opt_fwd,
+            device,
+            scaler=fwd_scaler,
+            use_amp=use_amp,
+        )
         te_loss, te_acc = aj_util.eval_epoch(model_fwd, test_loader, device)
         if ep % 50 == 0 or ep == 1 or ep == args.epochs:
             print(f"[Forward AJ] Epoch {ep:4d} | train {tr_loss:.4f}/{tr_acc:.2f}% | test {te_loss:.4f}/{te_acc:.2f}%")
